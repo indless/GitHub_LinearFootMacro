@@ -1,0 +1,647 @@
+Attribute VB_Name = "LFMacro"
+Sub LFMacro()
+    'Latest version - 4/9/2015
+    'Will not error if no items found for any of the steps
+    'Checks against GPCdatabase file, removes any materials found
+    'Finds LF & Stacking rules
+    'Finds materials with bad or not found dimension values - placed in Error file
+    'Calculates LF for accessories & Wichita product
+    'Add these materials to the GPCdatabase
+    'Will show all data after each stage even if no materials found
+    'Delete empty rows from Upload file
+    
+    Dim wbMaterials As Workbook
+    Dim wbLF As Workbook
+    Dim wbError As Workbook
+    Dim wsMaterials As Worksheet
+    Dim wsMissingDimensions As Worksheet
+    Dim wsLF As Worksheet
+    
+    Dim FinalRow As Integer, MissingDimensions As Integer, visibleRows As Integer, MaxRow As Integer
+    Dim materials As Integer, dimensions As Integer, dimensionCharLen As Integer, mrpc As Integer, plant As Integer, vehicleType As Integer, unskiddedFeet As Integer, FinalColumn As Integer, theDate As Long
+    Dim materialSheet As String, nameMissingDimensions As String, nameMaterials As String
+    Dim LFsheet As String, nameLF As String, LFtableSheet As String, nameLFtable As String
+    Dim directoryLoadingFile As String, directoryLFMaster As String, directoryErrors As String
+    Dim temporaryFile As String, errorFile As String, lfUpdateFile As String
+    Dim dimArray As Variant, errorArray As Variant
+    Dim L As Integer, W As Integer, H As Integer, startNum As Integer, endNum As Integer, n As Integer, c As Long
+    Dim runfunction As Integer, dimArraySet As Boolean, errorArraySet As Boolean
+    
+    materials = 1
+    dimensions = 2
+    plant = 3
+    mrpc = 4
+    vehicleType = mrpc + 1
+    unskiddedFeet = mrpc + 4
+    FinalColumn = mrpc + 8
+    dimArraySet = False
+    errorArraySet = False
+    nameMissingDimensions = "MissingDimensions"
+    materialSheet = ActiveSheet.name
+    LFsheet = "Sheet1" 'Name of sheet in LF Master file that has commercial cabinet sizes and LF data
+    nameLF = "LF Master.xls" 'Name of file that contains the commercial cabinet sizes and LF data
+    LFtableSheet = "Sheet1"
+    nameLFtable = "GPC Database 021515.xlsx"
+    temporaryFile = "temporary.xlsx"
+    errorFile = "Dimension Errors "
+    lfUpdateFile = "LF Update "
+    directoryLoadingFile = "\\c4445m021.cg.na.jci.com\Workgroups\SupplyChain\Logistics\LF\Updates\" 'directory for saving LF Update Loading Files
+    directoryLFMaster = "\\c4445m021.cg.na.jci.com\Workgroups\SupplyChain\Logistics\LF\Active LF\" 'directory where LF Master is located
+    directoryErrors = "\\c4445m021.cg.na.jci.com\Workgroups\SupplyChain\Logistics\LF\LF Dimension Errors\" 'directory for saving LF Dimension Error Files
+    theDate = Int(Format(Date, "yy") & Format(Date, "mm") & Format(Date, "dd"))
+    dimensionCharLen = 19 'standard character length of dimension field value
+    L = 633 'Length of truck in inches
+    W = 99  'Width of truck in inches
+    H = 107 'Height of truck in inches
+
+
+''!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! START TEST DATA !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+'    nameLFtable = "GPC Database Test.xlsx"
+'    temporaryFile = "temporary test.xlsx"
+'    errorFile = "Error Log test "
+'    lfUpdateFile = "LF Update test "
+'
+''!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! END TEST DATA !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    
+    Set wbMaterials = ActiveWorkbook
+    Set wsMaterials = ActiveWorkbook.ActiveSheet
+    nameMaterials = wsMaterials.name
+    FinalRow = Cells(Rows.Count, materials).End(xlUp).Row 'Find the last row
+    MaxRow = FinalRow
+    
+    runfunction = TurnAutoFilterOn(wsMaterials)
+    
+    'Sort descending on Plant - ensures any materials produced in Wichita will have 1001 item removed
+    wsMaterials.AutoFilter.Sort.SortFields.Clear
+    wsMaterials.AutoFilter.Sort.SortFields.add Key:=Range _
+        (Cells(1, plant), Cells(FinalRow, plant)), SortOn:=xlSortOnValues, Order:=xlDescending, DataOption:= _
+        xlSortTextAsNumbers
+    With wsMaterials.AutoFilter.Sort
+        .header = xlYes
+        .MatchCase = False
+        .Orientation = xlTopToBottom
+        .SortMethod = xlPinYin
+        .Apply
+    End With
+    
+    'Remove duplicates    Columns:=Array(1, 2, 3, 4)
+    wsMaterials.Columns(materials).Resize(, mrpc).Select
+    wsMaterials.Range(Cells(1, materials), Cells(FinalRow, mrpc)).RemoveDuplicates Columns:=1, header:=xlYes
+        
+    FinalRow = Cells(Rows.Count, materials).End(xlUp).Row 'Find the new last row
+    
+    'compare against master list of already loaded materials on shared drive
+    'Open LF current materials already in LF table
+    Set wbLF = Workbooks.Open(directoryLFMaster & nameLFtable)
+    Set wsLF = wbLF.Worksheets(LFtableSheet)
+    
+    'Compare dimensions to LF Master.xls
+    'save file as xlWorkbookNormal so you can use formula on rows > 65656
+    wsMaterials.Activate
+    wbMaterials.SaveAs fileName:=directoryLoadingFile & temporaryFile, FileFormat:=xlOpenXMLWorkbook, CreateBackup:=False
+    wbMaterials.Close
+
+    Set wbMaterials = Workbooks.Open(directoryLoadingFile & temporaryFile)
+    Set wsMaterials = wbMaterials.ActiveSheet
+    wbMaterials.Activate
+    wsMaterials.Activate
+    
+    'Sort on materials column
+    runfunction = TurnAutoFilterOn(wsMaterials)
+    wsMaterials.AutoFilter.Sort.SortFields.Clear
+    wsMaterials.AutoFilter.Sort.SortFields.add Key:=Range _
+        (Cells(1, materials), Cells(FinalRow, materials)), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:= _
+        xlSortTextAsNumbers
+    With wsMaterials.AutoFilter.Sort
+        .header = xlYes
+        .MatchCase = False
+        .Orientation = xlTopToBottom
+        .SortMethod = xlPinYin
+        .Apply
+    End With
+    
+    wsMaterials.Columns(dimensions).Select 'insert temporary column for vlookup values
+    Selection.Insert Shift:=xlToRight, CopyOrigin:=xlFormatFromLeftOrAbove
+    
+    wsMaterials.Cells(2, dimensions).Select
+    ActiveCell.FormulaR1C1 = _
+        "=IFERROR(VLOOKUP(RC1,'[" & nameLFtable & "]" & LFtableSheet & "'!C1:C2,2,FALSE),""add"")"
+    
+    'copy formula and paste to last row
+    Selection.Copy
+    Selection.Resize(FinalRow - 1, 1).Select
+    ActiveSheet.Paste
+    
+    'Copy paste special to remove formulas
+    wsMaterials.Cells.Select
+    Selection.Copy
+    Selection.PasteSpecial Paste:=xlPasteValues, operation:=xlNone, SkipBlanks _
+        :=False, Transpose:=False
+    Application.CutCopyMode = False
+    
+    'Sort on temporary dimensions field
+    runfunction = TurnAutoFilterOn(wsMaterials)
+    wsMaterials.AutoFilter.Sort.SortFields.Clear
+    wsMaterials.AutoFilter.Sort.SortFields.add Key:=Range _
+        (Cells(1, dimensions), Cells(FinalRow, dimensions)), SortOn:=xlSortOnValues, Order:=xlDescending, DataOption:= _
+        xlSortTextAsNumbers
+    With wsMaterials.AutoFilter.Sort
+        .header = xlYes
+        .MatchCase = False
+        .Orientation = xlTopToBottom
+        .SortMethod = xlPinYin
+        .Apply
+    End With
+    wsMaterials.Range(Cells(1, dimensions), Cells(FinalRow, dimensions)).AutoFilter Field:=2, Criteria1:="0" _
+        , Operator:=xlFilterValues
+    
+    'Find the startNum of the filtered range, find the endNum of the filtered range
+    startNum = 0
+    endNum = 0
+    If ActiveSheet.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(1, materials).Row <= FinalRow Then
+        startNum = ActiveSheet.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(1, materials).Row
+        
+        If ActiveSheet.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(startNum + 1, materials).Row <= FinalRow Then
+            endNum = ActiveSheet.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(1, materials).End(xlDown).Row
+        ElseIf startNum <= FinalRow Then
+            endNum = FinalRow
+        Else
+            endNum = FinalRow + 1
+        End If
+    Else
+        startNum = FinalRow + 1
+    End If
+    
+    'If there are materials already in the GPC Database, delete those materials
+    If startNum <= FinalRow And endNum <= FinalRow Then
+        visibleRows = endNum - startNum + 1
+        
+        wsMaterials.Range(Cells(startNum, materials), Cells(endNum, FinalColumn)).ClearContents 'remove any items already in the GPC Database file
+        
+        'Sort on materials column
+        runfunction = TurnAutoFilterOn(wsMaterials)
+        wsMaterials.AutoFilter.ShowAllData
+        FinalRow = Cells(Rows.Count, materials).End(xlUp).Row 'Find the last row
+        wsMaterials.AutoFilter.Sort.SortFields.Clear
+        wsMaterials.AutoFilter.Sort.SortFields.add Key:=Range _
+            (Cells(1, materials), Cells(FinalRow, materials)), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:= _
+            xlSortTextAsNumbers
+        With wsMaterials.AutoFilter.Sort
+            .header = xlYes
+            .MatchCase = False
+            .Orientation = xlTopToBottom
+            .SortMethod = xlPinYin
+            .Apply
+        End With
+        
+        wbMaterials.Activate
+        wsMaterials.Activate
+        
+        FinalRow = startNum - 1
+    End If
+    
+    'Close GPC Database spreadsheet
+    wbLF.Close SaveChanges:=False
+    
+    wsMaterials.Activate
+    
+    wsMaterials.AutoFilter.ShowAllData
+    wsMaterials.Columns(dimensions).Delete 'Delete the temporary column used to determine if the item is already in GPC Database
+    
+    FinalRow = Cells(Rows.Count, materials).End(xlUp).Row 'Find the new last row
+    
+    wsMaterials.Cells(1, mrpc + 1) = "Vehicle Type"
+    wsMaterials.Cells(1, mrpc + 2) = "Stacking Code"
+    wsMaterials.Cells(1, mrpc + 3) = "Stack Qty"
+    wsMaterials.Cells(1, mrpc + 4) = "Unskidded Feet"
+    wsMaterials.Cells(1, mrpc + 5) = "Skidded Feet"
+    wsMaterials.Cells(1, mrpc + 6) = "Stack Group"
+    wsMaterials.Cells(1, mrpc + 7) = "Mix Stack Code"
+    wsMaterials.Cells(1, mrpc + 8) = "Stack Type"
+
+    runfunction = TurnAutoFilterOn(wsMaterials, materials, FinalColumn)
+    
+    'open "LF Master.xls"
+    Set wbLF = Workbooks.Open(directoryLFMaster & nameLF)
+    Set wsLF = wbLF.Worksheets(LFsheet)
+    
+    'Compare dimensions to LF Master.xls
+    wsMaterials.Activate
+    
+    wsMaterials.Cells(2, vehicleType).Select
+    ActiveCell.FormulaR1C1 = _
+        "=IF(OR(RC3 = ""1001"", RC3 = 1001),IFERROR(IF(VLOOKUP(RC2,'[" & nameLF & "]" & LFsheet & "'!C3:C11,COLUMN()-3,FALSE)=0,"""",VLOOKUP(RC2,'[" & nameLF & "]" & LFsheet & "'!C3:C11,COLUMN()-3,FALSE)),""zzerror""),""zzerror"")"
+    
+    'copy formula and paste to last column, then copy formulas from (mrpc + 1 to mrpc + 8), paste to last row
+    Selection.Copy
+    Selection.Resize(1, FinalColumn - vehicleType).Select
+    ActiveSheet.Paste
+    Selection.Copy
+    Selection.Resize(FinalRow - 1, FinalColumn - vehicleType).Select
+    ActiveSheet.Paste
+    
+    'Copy paste special to remove formulas
+    Cells.Select
+    Selection.Copy
+    Selection.PasteSpecial Paste:=xlPasteValues, operation:=xlNone, SkipBlanks _
+        :=False, Transpose:=False
+    Application.CutCopyMode = False
+    
+    'Close LF Master spreadsheet
+    wbLF.Close SaveChanges:=False
+    
+    wsMaterials.Activate
+    
+    'Test if Dimensions value is in the correct format
+    wsMaterials.Columns(vehicleType).Select
+    Selection.Insert Shift:=xlToRight, CopyOrigin:=xlFormatFromLeftOrAbove
+    wsMaterials.Cells(2, vehicleType).Select
+    ActiveCell.FormulaR1C1 = "=IF(OR(LEN(RC[-3])<>19,AND(OR(RC[-2]=""1001"",RC[-2]=1001),AND(AND(RC[-1]<>""523"",RC[-1]<>523),AND(RC[-1]<>""525"",RC[-1]<>525),AND(RC[-1]<>""541"",RC[-1]<>541),AND(RC[-1]<>""538"",RC[-1]<>538),AND(RC[-1]<>""539"",RC[-1]<>539),AND(RC[-1]<>""542"",RC[-1]<>542),AND(RC[-1]<>""800"",RC[-1]<>800)),RC[1]=""zzerror"")),1,2)"
+    Selection.Copy
+    wsMaterials.Range(Cells(2, vehicleType), Cells(FinalRow, vehicleType)).Select
+    ActiveSheet.Paste
+    Application.CutCopyMode = False
+    runfunction = TurnAutoFilterOn(wsMaterials)
+    wsMaterials.AutoFilter.Sort.SortFields.Clear
+    wsMaterials.AutoFilter.Sort.SortFields.add Key:=Range _
+        (Cells(1, vehicleType), Cells(FinalRow, vehicleType)), SortOn:=xlSortOnValues, Order:=xlDescending, DataOption:= _
+        xlSortTextAsNumbers
+    With wsMaterials.AutoFilter.Sort
+        .header = xlYes
+        .MatchCase = False
+        .Orientation = xlTopToBottom
+        .SortMethod = xlPinYin
+        .Apply
+    End With
+    wsMaterials.Range(Cells(1, vehicleType), Cells(FinalRow, vehicleType)).AutoFilter Field:=5, Criteria1:="1" _
+        , Operator:=xlFilterValues
+    
+    'Find the startNum of the filtered range, find the endNum of the filtered range
+    startNum = 0
+    endNum = 0
+    If ActiveSheet.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(1, materials).Row <= FinalRow Then
+        startNum = ActiveSheet.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(1, materials).Row
+        
+        If ActiveSheet.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(startNum + 1, materials).Row <= FinalRow Then
+            endNum = ActiveSheet.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(1, materials).End(xlDown).Row
+        ElseIf startNum <= FinalRow Then
+            endNum = FinalRow
+        Else
+            endNum = FinalRow + 1
+        End If
+    Else
+        startNum = FinalRow + 1
+    End If
+    
+    
+    'If there are materials with no dimensions, cut those materials from the list and paste into a new workbook & sheet called MissingDimesions
+    If startNum <= FinalRow And endNum <= FinalRow Then
+        visibleRows = endNum - startNum + 1
+        errorArray = Range(Cells(startNum, materials), Cells(FinalRow, vehicleType)).Value
+        wsMaterials.Range(Cells(startNum, materials), Cells(FinalRow, FinalColumn)).ClearContents
+        FinalRow = startNum - 1 'New last row
+        Set wbError = Workbooks.add
+        wbError.SaveAs fileName:=directoryErrors & errorFile & theDate & ".xls", FileFormat:=xlWorkbookNormal
+        wbError.Save
+        ActiveSheet.name = nameMissingDimensions
+        Set wsMissingDimensions = ActiveWorkbook.ActiveSheet
+        wsMissingDimensions.Cells(1, materials) = "Material"
+        wsMissingDimensions.Cells(1, dimensions) = "Size/Dimensions"
+        wsMissingDimensions.Cells(1, dimensions + 1) = "Plnt"
+        wsMissingDimensions.Cells(1, mrpc) = "MRPC"
+        wsMissingDimensions.Cells(1, vehicleType) = "Character Length of Size/Dimensions"
+        wsMissingDimensions.Range("A2").Resize(UBound(errorArray, 1), UBound(errorArray, 2)).Value = errorArray
+        c = Cells(Rows.Count, materials).End(xlUp).Row
+        wsMissingDimensions.Range("E2").FormulaR1C1 = _
+            "=IF(Len(RC[-3])=0, ""Missing Dimension Data"", IF(Len(RC[-3])<>19,""Dimension Data - Wrong Format"", ""Cabinet not found is LF Master spreadsheet""))"
+        wsMissingDimensions.Range("E2").Copy
+        wsMissingDimensions.Range(Cells(2, 5), Cells(c, 5)).Select
+        ActiveSheet.Paste
+        
+        'Copy paste special to remove formulas
+        Cells.Select
+        Selection.Copy
+        Selection.PasteSpecial Paste:=xlPasteValues, operation:=xlNone, SkipBlanks _
+            :=False, Transpose:=False
+        Application.CutCopyMode = False
+
+        runfunction = TurnAutoFilterOn(wsMissingDimensions, materials, vehicleType)
+        wsMissingDimensions.AutoFilter.Sort.SortFields.Clear
+        wsMissingDimensions.AutoFilter.Sort.SortFields.add _
+            Key:=Range(Cells(2, 5), Cells(c, 5)), SortOn:=xlSortOnValues, Order:=xlAscending, _
+            DataOption:=xlSortTextAsNumbers
+        With wsMissingDimensions.AutoFilter.Sort
+            .header = xlYes
+            .MatchCase = False
+            .Orientation = xlTopToBottom
+            .SortMethod = xlPinYin
+            .Apply
+        End With
+
+        wsMissingDimensions.Columns("A:E").Select
+        wsMissingDimensions.Columns("A:E").EntireColumn.AutoFit
+        
+        wbError.Save
+        
+        wbMaterials.Activate
+        wsMaterials.Activate
+        
+        FinalRow = startNum - 1
+        
+        errorArraySet = True
+    End If
+    
+    wsMaterials.Activate
+    runfunction = TurnAutoFilterOn(wsMaterials)
+    wsMaterials.AutoFilter.ShowAllData
+    wsMaterials.Columns(vehicleType).Delete 'Delete the temporary column used to determine if the item has an error
+    
+    'Sort A to Z on vehicleType column, then show only "zzerror" items, use formula on these
+    runfunction = TurnAutoFilterOn(wsMaterials)
+    wsMaterials.AutoFilter.Sort.SortFields.Clear
+    wsMaterials.AutoFilter.Sort.SortFields.add Key:=Range _
+        (Cells(1, vehicleType), Cells(FinalRow, vehicleType)), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:= _
+        xlSortTextAsNumbers
+    With wsMaterials.AutoFilter.Sort
+        .header = xlYes
+        .MatchCase = False
+        .Orientation = xlTopToBottom
+        .SortMethod = xlPinYin
+        .Apply
+    End With
+    wsMaterials.Range(Cells(1, materials), Cells(FinalRow, FinalColumn)).AutoFilter Field:=5, Criteria1:="zzerror"
+    
+    'Select all #N/A items and clear contents
+    wsMaterials.Range(Cells(1, vehicleType), Cells(1, vehicleType)).Offset(1, 0).Select
+    wsMaterials.Range(Selection, Selection.End(xlToRight)).Select
+    wsMaterials.Range(Selection, Selection.End(xlDown)).Select
+    Selection.ClearContents
+
+    'Put in V for Vehicle Type
+    'Find the startNum of the filtered range, find the endNum of the filtered range
+    startNum = 0
+    endNum = 0
+    If ActiveSheet.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(1, materials).Row <= FinalRow Then
+        startNum = ActiveSheet.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(1, materials).Row
+        
+        If ActiveSheet.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(startNum + 1, materials).Row <= FinalRow Then
+            endNum = ActiveSheet.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(1, materials).End(xlDown).Row
+        ElseIf startNum <= FinalRow Then
+            endNum = FinalRow
+        Else
+            endNum = FinalRow + 1
+        End If
+    Else
+        startNum = FinalRow + 1
+    End If
+    
+    If startNum <= FinalRow And endNum <= FinalRow Then
+        visibleRows = endNum - startNum + 1
+        wsMaterials.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(1, vehicleType).Select
+        ActiveCell.FormulaR1C1 = "V"
+        wsMaterials.AutoFilter.Range.CurrentRegion.Offset(1).SpecialCells(xlCellTypeVisible).Range(Cells(1, vehicleType), Cells(1, vehicleType)).Select
+        Selection.Copy
+        wsMaterials.AutoFilter.Range.CurrentRegion.Offset(1).SpecialCells(xlCellTypeVisible).Range(Cells(1, vehicleType), Cells(visibleRows, vehicleType)).Select
+        ActiveSheet.Paste
+        Application.CutCopyMode = False
+        
+        'Calculate unskidded feet
+        'dimArray = Range(Cells(startNum, dimensions), Cells(endNum, dimensions)).Value
+        ReDim dimArray(startNum To endNum, 1 To 12) As Variant
+        
+        For n = startNum To endNum
+            dimArray(n, 1) = wsMaterials.Cells(n, dimensions).Value
+            dimArray(n, 2) = Right(Left(dimArray(n, 1), 4), 3) 'Length of material
+            dimArray(n, 3) = Right(Left(dimArray(n, 1), 9), 3) 'Width of material
+            dimArray(n, 4) = Right(Left(dimArray(n, 1), 14), 3) 'Height of material
+            dimArray(n, 5) = Application.WorksheetFunction.RoundDown(L / dimArray(n, 2), 0) 'Length of truck / unit L
+            dimArray(n, 6) = Application.WorksheetFunction.RoundDown(W / dimArray(n, 3), 0) 'Width of truck / unit W
+            dimArray(n, 7) = Application.WorksheetFunction.RoundDown(H / dimArray(n, 4), 0) 'Height of truck / unit H
+            If dimArray(n, 7) > 3 Then 'max stack height is 3
+                dimArray(n, 8) = 3
+            Else
+                dimArray(n, 8) = dimArray(n, 7)
+            End If
+            dimArray(n, 9) = dimArray(n, 6) * dimArray(n, 8) '(# of units / width of truck) * (# of units / height of truck)
+            dimArray(n, 10) = dimArray(n, 5) * dimArray(n, 9) '(# of units / length of truck) * ((# of units / width of truck) * (# of units / height of truck))
+            dimArray(n, 11) = Application.WorksheetFunction.Round(53 / dimArray(n, 10), 2) 'truck length in feet / max units per truck
+            
+            If dimArray(n, 11) = 0 Then
+                dimArray(n, 11) = 0.01
+            End If
+            
+            wsMaterials.Cells(n, unskiddedFeet).Value = dimArray(n, 11)
+        Next n
+        
+        'Clear filter options
+        runfunction = TurnAutoFilterOn(wsMaterials)
+        wsMaterials.AutoFilter.ShowAllData
+        'Copy paste special to remove formulas
+        wsMaterials.Cells.Select
+        Selection.Copy
+        Selection.PasteSpecial Paste:=xlPasteValues, operation:=xlNone, SkipBlanks _
+            :=False, Transpose:=False
+        Application.CutCopyMode = False
+        
+        dimArraySet = True
+    End If
+    
+    'Delete dimensions, plnt, mrpc columns
+    wsMaterials.Columns(dimensions).Resize(, 3).Delete
+    FinalColumn = FinalColumn - 3
+
+    
+    'compare against master list of already loaded materials on shared drive
+    'Open LF current materials already in LF table
+    Set wbLF = Workbooks.Open(directoryLFMaster & nameLFtable)
+    Set wsLF = wbLF.Worksheets(LFtableSheet)
+    
+    'Compare dimensions to LF Master.xls
+    'save file as xlWorkbookNormal so you can use formula on rows > 65656
+    wsMaterials.Activate
+    wbMaterials.SaveAs fileName:=directoryLoadingFile & temporaryFile, FileFormat:=xlOpenXMLWorkbook, CreateBackup:=False
+    wbMaterials.Close
+
+    Set wbMaterials = Workbooks.Open(directoryLoadingFile & temporaryFile)
+    Set wsMaterials = wbMaterials.ActiveSheet
+    wbMaterials.Activate
+    wsMaterials.Activate
+    
+    'Sort on materials column
+    runfunction = TurnAutoFilterOn(wsMaterials)
+    wsMaterials.AutoFilter.ShowAllData
+    wsMaterials.AutoFilter.Sort.SortFields.Clear
+    wsMaterials.AutoFilter.Sort.SortFields.add Key:=Range _
+        (Cells(1, materials), Cells(FinalRow, materials)), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:= _
+        xlSortTextAsNumbers
+    With wsMaterials.AutoFilter.Sort
+        .header = xlYes
+        .MatchCase = False
+        .Orientation = xlTopToBottom
+        .SortMethod = xlPinYin
+        .Apply
+    End With
+    
+    wsMaterials.Columns(dimensions).Select 'insert temporary column for vlookup values
+    Selection.Insert Shift:=xlToRight, CopyOrigin:=xlFormatFromLeftOrAbove
+    
+    wsMaterials.Cells(2, dimensions).Select
+    ActiveCell.FormulaR1C1 = _
+        "=IFERROR(VLOOKUP(RC1,'[" & nameLFtable & "]" & LFtableSheet & "'!C1:C2,2,FALSE),""add"")"
+    
+    'copy formula and paste to last row
+    Selection.Copy
+    Selection.Resize(FinalRow - 1, 1).Select
+    ActiveSheet.Paste
+    
+    'Copy paste special to remove formulas
+    wsMaterials.Cells.Select
+    Selection.Copy
+    Selection.PasteSpecial Paste:=xlPasteValues, operation:=xlNone, SkipBlanks _
+        :=False, Transpose:=False
+    Application.CutCopyMode = False
+    
+    'Sort on temporary dimensions field
+    runfunction = TurnAutoFilterOn(wsMaterials)
+    wsMaterials.AutoFilter.Sort.SortFields.Clear
+    wsMaterials.AutoFilter.Sort.SortFields.add Key:=Range _
+        (Cells(1, dimensions), Cells(FinalRow, dimensions)), SortOn:=xlSortOnValues, Order:=xlDescending, DataOption:= _
+        xlSortTextAsNumbers
+    With wsMaterials.AutoFilter.Sort
+        .header = xlYes
+        .MatchCase = False
+        .Orientation = xlTopToBottom
+        .SortMethod = xlPinYin
+        .Apply
+    End With
+    wsMaterials.Range(Cells(1, dimensions), Cells(FinalRow, dimensions)).AutoFilter Field:=2, Criteria1:="add" _
+        , Operator:=xlFilterValues
+    
+    'Find the startNum of the filtered range, find the endNum of the filtered range
+    startNum = 0
+    endNum = 0
+    If ActiveSheet.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(1, materials).Row <= FinalRow Then
+        startNum = ActiveSheet.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(1, materials).Row
+        
+        If ActiveSheet.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(startNum + 1, materials).Row <= FinalRow Then
+            endNum = ActiveSheet.AutoFilter.Range.Offset(1).SpecialCells(xlCellTypeVisible).Cells(1, materials).End(xlDown).Row
+        ElseIf startNum <= FinalRow Then
+            endNum = FinalRow
+        Else
+            endNum = FinalRow + 1
+        End If
+    Else
+        startNum = FinalRow + 1
+    End If
+    
+    'Add new materials to the GPC Database
+    If startNum <= FinalRow And endNum <= FinalRow Then
+        visibleRows = endNum - startNum + 1
+        
+        'Sort on materials column
+        runfunction = TurnAutoFilterOn(wsMaterials)
+        wsMaterials.AutoFilter.ShowAllData
+        wsMaterials.AutoFilter.Sort.SortFields.Clear
+        wsMaterials.AutoFilter.Sort.SortFields.add Key:=Range _
+            (Cells(1, materials), Cells(FinalRow, materials)), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:= _
+            xlSortTextAsNumbers
+        With wsMaterials.AutoFilter.Sort
+            .header = xlYes
+            .MatchCase = False
+            .Orientation = xlTopToBottom
+            .SortMethod = xlPinYin
+            .Apply
+        End With
+        
+        FinalRow = wsMaterials.Cells(Rows.Count, materials).End(xlUp).Row 'Find the new last row
+        
+        'Copy list of materials not in GPC Database File
+        errorArray = wsMaterials.Range(Cells(2, materials), Cells(FinalRow, materials)).Value
+        
+        'Add new materials to the GPC Database file
+        wbLF.Activate
+        wsLF.Activate
+        
+        runfunction = TurnAutoFilterOn(wsLF)
+        wsLF.AutoFilter.ShowAllData
+        c = 0
+        c = wsLF.Cells(Rows.Count, materials).End(xlUp).Row + 1 'Find the new last row
+        
+        'Add new materials to the GPC Database file ******macro will error if only 1 material is in the array (treats it as a string, not array, so the UBound() doesn't work I believe)
+        wsLF.Range(Cells(c, materials), Cells(c, materials)).Resize(UBound(errorArray, 1), 1).Value = errorArray
+        
+        c = Cells(Rows.Count, materials).End(xlUp).Row 'Find the new last row
+        
+        wsLF.AutoFilter.Sort.SortFields.Clear
+        wsLF.AutoFilter.Sort.SortFields.add _
+            Key:=Range(Cells(2, materials), Cells(c, materials)), SortOn:=xlSortOnValues, Order:=xlAscending, _
+            DataOption:=xlSortTextAsNumbers
+        With wsLF.AutoFilter.Sort
+            .header = xlYes
+            .MatchCase = False
+            .Orientation = xlTopToBottom
+            .SortMethod = xlPinYin
+            .Apply
+        End With
+        
+        wbLF.Save
+        'Close GPC Database spreadsheet
+        wbLF.Close SaveChanges:=True
+        
+        wbMaterials.Activate
+        wsMaterials.Activate
+        
+        errorArraySet = True
+    End If
+    
+    wsMaterials.Activate
+    
+    runfunction = TurnAutoFilterOn(wsMaterials)
+    wsMaterials.AutoFilter.ShowAllData
+    wsMaterials.Columns(dimensions).Delete 'Delete the temporary column used to determine if the item is already in GPC Database
+
+    'Delete empty rows
+    FinalRow = Cells(Rows.Count, materials).End(xlUp).Row 'Find the new last row
+    Rows(CStr(FinalRow + 1) & ":" & CStr(MaxRow)).Delete
+
+    'Save as "LF Update Loading File " & date & .csv
+    wbMaterials.SaveAs fileName:= _
+        directoryLoadingFile & lfUpdateFile & theDate & ".csv", FileFormat:=xlCSV, CreateBackup _
+        :=False
+    wbMaterials.Close SaveChanges:=True
+    
+    Set wbMaterials = Nothing
+    Set wsMaterials = Nothing
+    Set wbLF = Nothing
+    Set wsLF = Nothing
+    Set wbError = Nothing
+    Set wsMissingDimensions = Nothing
+    
+    If errorArraySet Then
+        Erase errorArray
+    End If
+    
+    If dimArraySet Then
+        Erase dimArray
+    End If
+
+    Application.DisplayAlerts = False
+    Application.ScreenUpdating = True
+
+End Sub
+
+Private Function TurnAutoFilterOn(ByRef thisWorksheet As Worksheet, Optional ByVal startCol As Integer, Optional ByVal endCol As Integer) As Integer
+    'check for filter, turn on if none exists
+    If startCol > 0 And endCol > 0 Then
+        thisWorksheet.Columns(startCol).Resize(, endCol).AutoFilter
+    Else
+        If Not thisWorksheet.AutoFilterMode Then
+            thisWorksheet.Cells.AutoFilter
+        End If
+    End If
+
+End Function
